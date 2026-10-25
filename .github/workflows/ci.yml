@@ -34,10 +34,23 @@ jobs:
         with:
           path: plugin
 
+      # The host ref: the one asked for, else a thoremin branch named like this one (a change that
+      # needs a host change too is reviewed as a pair of same-named branches), else main.
+      - name: Pick the thoremin ref
+        id: host
+        env:
+          ASKED: ${{ inputs.host_ref }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref="$ASKED"
+          if [ -z "$ref" ] && [ "$BRANCH" != "main" ] && git ls-remote --exit-code --heads https://github.com/thorwhalen/thoremin "$BRANCH" >/dev/null; then ref="$BRANCH"; fi
+          echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
+          echo "testing against thoremin ${ref:-main}"
+
       - uses: actions/checkout@v4
         with:
           repository: thorwhalen/thoremin
-          ref: ${{ inputs.host_ref || 'main' }}
+          ref: ${{ steps.host.outputs.ref }}
           path: host
 
       - uses: actions/setup-node@v4
