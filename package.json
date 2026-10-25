@@ -1,0 +1,41 @@
+{
+  "name": "@thoremin/ext-draw",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "thoremin's drawn pieces: shapes drawn in the air with a pinch become 3-D drums and strings on the video, played by the fingertips, every nuance of the stroke changing the sound. A lazy thoremin extension; TypeScript source, consumed by thoremin as a git dependency.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./branches": "./src/branches.ts",
+    "./dials": "./src/dials.ts",
+    "./schema": "./src/schema.ts",
+    "./ui": "./src/ui.tsx",
+    "./lazy": "./src/lazy.ts",
+    "./lazy_ui": "./src/lazy_ui.tsx",
+    "./app/drawnStatus": "./src/app/drawnStatus.ts",
+    "./lib/*": "./src/lib/*.ts",
+    "./nodes/*": "./src/nodes/*.ts",
+    "./panels/drawn": "./src/panels/drawn.tsx",
+    "./package.json": "./package.json",
+    "./nodes/overlay/*": "./src/nodes/overlay/*.ts",
+    "./render/*": "./src/render/*.ts"
+  },
+  "peerDependencies": {
+    "@thoremin/dag": "*",
+    "@thoremin/lazy": "*",
+    "@thoremin/sdk": "*",
+    "@thoremin/sdk-ui": "*",
+    "react": "*",
+    "three": ">=0.170.0",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thorwhalen/thoremin-ar.git"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}

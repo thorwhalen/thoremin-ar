@@ -1,0 +1,107 @@
+# The drawn pieces plugin is useless without its host, so CI runs it inside a real thoremin: thoremin's
+# main, with THIS commit in place of the pinned plugin and this repository's tests added to
+# thoremin's suite. Then thoremin's own gates: the strict typecheck (it reaches the plugin
+# through its imports and the copied tests), the whole suite (its static guards scan the
+# plugin's source too), the build, and the lazy-bundle check (the plugin's code is in no chunk
+# a cold load fetches).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      host_ref:
+        description: "thoremin ref to test against (a branch while a host change is in review)"
+        required: false
+        default: main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  in-thoremin:
+    name: in thoremin (typecheck / test / build / lazy bundle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      # The host ref: the one asked for, else a thoremin branch named like this one (a change that
+      # needs a host change too is reviewed as a pair of same-named branches), else main.
+      - name: Pick the thoremin ref
+        id: host
+        env:
+          ASKED: ${{ inputs.host_ref }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref="$ASKED"
+          if [ -z "$ref" ] && [ "$BRANCH" != "main" ] && git ls-remote --exit-code --heads https://github.com/thorwhalen/thoremin "$BRANCH" >/dev/null; then ref="$BRANCH"; fi
+          echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
+          echo "testing against thoremin ${ref:-main}"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: thorwhalen/thoremin
+          ref: ${{ steps.host.outputs.ref }}
+          path: host
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: host/package-lock.json
+
+      - name: Install thoremin (lockfile-exact)
+        working-directory: host
+        run: npm ci --no-audit --no-fund
+
+      # Before the copy: an npm install would prune the copied plugin (it is not in the host's lockfile).
+      - name: Wire the plugin into the host if its main does not name it yet
+        working-directory: host
+        run: |
+          node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync("extensions.json", "utf8"));
+            if (!j.extensions.some((e) => e.id === "drawn-pieces")) {
+              j.extensions.push({ id: "drawn-pieces", module: "@thoremin/ext-draw", ui: "@thoremin/ext-draw/ui", lazy: { module: "@thoremin/ext-draw/lazy", ui: "@thoremin/ext-draw/lazy_ui" } });
+              fs.writeFileSync("extensions.json", JSON.stringify(j, null, 2));
+            }
+            const t = JSON.parse(fs.readFileSync("tsconfig.dag.json", "utf8"));
+            if (!t.include.includes("node_modules/@thoremin/ext-draw/src")) {
+              t.include.push("node_modules/@thoremin/ext-draw/src");
+              fs.writeFileSync("tsconfig.dag.json", JSON.stringify(t, null, 2));
+            }
+          '
+          [ -d node_modules/three ] || npm install --no-save --no-audit --no-fund three@0.186.1 @types/three@0.186.0
+          node -e 'const fs=require("fs");const f="vite.lazy-guard.ts";let s=fs.readFileSync(f,"utf8");if(!s.includes("\x27three\x27")){s=s.replace("LAZY_PACKAGES: readonly string[] = [","LAZY_PACKAGES: readonly string[] = [\n  \x27three\x27,");fs.writeFileSync(f,s);}'
+
+      - name: Put this commit in place of the pinned plugin, and add its tests
+        run: |
+          rm -rf host/node_modules/@thoremin/ext-draw
+          mkdir -p host/node_modules/@thoremin/ext-draw host/test/ext-draw
+          cp -r plugin/package.json plugin/src host/node_modules/@thoremin/ext-draw/
+          cp -r plugin/test/. host/test/ext-draw/
+
+      - name: Typecheck (strict)
+        working-directory: host
+        run: npm run typecheck
+
+      - name: Test (thoremin's suite plus this plugin's)
+        working-directory: host
+        run: npm test
+
+      - name: Build
+        working-directory: host
+        run: npm run build
+
+      - name: The plugin stays out of the initial chunks
+        working-directory: host
+        run: npm run check:lazy
