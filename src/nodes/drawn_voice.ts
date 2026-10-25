@@ -40,8 +40,15 @@ export const drawnVoiceNode = defineNode<Params>({
     let sinkAc: AudioContext | null = null;
     return {
       process(inputs, ctx: NodeContext) {
-        const contacts = inputs.contacts as ContactEvent[] | undefined;
-        if (inputs.mute === true || !Array.isArray(contacts) || contacts.length === 0) return {};
+        const contacts = Array.isArray(inputs.contacts) ? (inputs.contacts as ContactEvent[]) : [];
+        // Releases and the mute end held voices whatever else holds the output back: a held note
+        // must never outlive the touch that started it.
+        if (sink) {
+          const now = sinkAc?.currentTime ?? 0;
+          if (inputs.mute === true) sink.releaseAll(now);
+          for (const c of contacts) if (c.kind === 'release') sink.release(`${c.hand}|${c.piece}`, now);
+        }
+        if (inputs.mute === true || contacts.length === 0) return {};
         if (!realtimeOutputAllowed(ctx)) return {};
         const ac = ctx.resources.audioContext as AudioContext | undefined;
         const master = ctx.resources.masterGain as AudioNode | undefined;
@@ -61,13 +68,9 @@ export const drawnVoiceNode = defineNode<Params>({
         const at: TickClock = { clock, nowEngine: ctx.time, stage: timingFrom(ctx.resources).outputStage.value };
         for (const c of contacts) {
           const piece = pieces.find((p) => p.id === c.piece);
+          if (c.kind === 'release' || !piece) continue;
           const key = `${c.hand}|${c.piece}`;
           const when = scheduleAt(c.t, at);
-          if (c.kind === 'release') {
-            sink.release(key, when);
-            continue;
-          }
-          if (!piece) continue;
           const controls = controlsFor(c, piece);
           controls.gain *= volume;
           const midi = noteOf(piece, scale);

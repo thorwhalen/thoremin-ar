@@ -104,12 +104,15 @@ export function createContactDetector(tuning: Partial<typeof CONTACT_TUNING> = {
         const speedNow = norm(tr.v) / size;
         const speedPrev = norm(tr.vPrev) / size;
         const toSpeed = (v: number) => clamp01(v / (hitSpeed * k.fullSpeedOverHit));
+        // One piece per stroke: the nearest the camera takes a hit; the others still get their
+        // touch bookkeeping (a release) this frame.
+        let struck = false;
         for (const piece of order) {
-          if (depthMatch && s.depth !== null && Math.abs(s.depth - piece.depth) > k.depthReach) continue;
+          const reachable = !(depthMatch && s.depth !== null && Math.abs(s.depth - piece.depth) > k.depthReach);
           const outline = outlines.get(piece.id)!;
           const kk = key(s.hand, piece.id);
           if (piece.kind === 'string') {
-            if (!prev) continue;
+            if (!prev || !reachable) continue;
             const fast = speedNow >= hitSpeed * k.pluckSpeedOverHit;
             if (!fast) continue;
             for (let i = 1; i < outline.length; i++) {
@@ -131,7 +134,7 @@ export function createContactDetector(tuning: Partial<typeof CONTACT_TUNING> = {
             }
             continue;
           }
-          const inside = isOn(piece, s.p, outline);
+          const inside = reachable && isOn(piece, s.p, outline);
           const touch = touches.get(kk);
           if (!inside) {
             if (touch?.active) out.push({ t: s.t, piece: piece.id, kind: 'release', hand: s.hand, speed: 0, sharpness: 0, where: 0, angle: 0, x: s.p[0], y: s.p[1] });
@@ -142,14 +145,17 @@ export function createContactDetector(tuning: Partial<typeof CONTACT_TUNING> = {
           const turned = tr.v[0] * tr.vPrev[0] + tr.v[1] * tr.vPrev[1] < 0;
           const stopped = speedNow < k.stopRatio * speedPrev;
           const since = lastHit.get(kk) ?? -Infinity;
-          if (speedPrev >= hitSpeed && (turned || stopped) && s.t - since >= k.refractoryS) {
+          if (!struck && speedPrev >= hitSpeed && (turned || stopped) && s.t - since >= k.refractoryS) {
             lastHit.set(kk, s.t);
+            // A held note under the finger ends before the hit sounds.
+            if (touch?.active) out.push({ t: s.t, piece: piece.id, kind: 'release', hand: s.hand, speed: 0, sharpness: 0, where: 0, angle: 0, x: s.p[0], y: s.p[1] });
             const sharpness = turned ? 1 : clamp01(1 - speedNow / Math.max(1e-9, speedPrev));
             // Head-on is a stroke straight down (the drummer's stroke); sideways is glancing.
             const angle = clamp01(Math.abs(tr.vPrev[0]) / Math.max(1e-9, norm(tr.vPrev)));
             out.push({ t: s.t, piece: piece.id, kind: 'hit', hand: s.hand, speed: toSpeed(speedPrev), sharpness, where: radial(outline, s.p), angle, x: s.p[0], y: s.p[1] });
             touches.delete(kk);
-            break; // one piece per stroke: the nearest the camera takes it
+            struck = true;
+            continue;
           }
           // A touch: slow and staying.
           if (speedNow < hitSpeed * k.touchSpeedOverHit) {
@@ -174,6 +180,17 @@ export function createContactDetector(tuning: Partial<typeof CONTACT_TUNING> = {
         touches.delete(kk);
       }
       for (const hand of [...tracks.keys()]) if (!seen.has(hand)) tracks.delete(hand);
+      return out;
+    },
+    /** Release every held touch and forget the strokes (the mode left play, the instrument went off). */
+    releaseAll(t: number): ContactEvent[] {
+      const out: ContactEvent[] = [];
+      for (const [kk, tt] of touches) {
+        const [hand, piece] = kk.split('|') as [string, string];
+        if (tt.active) out.push({ t, piece, kind: 'release', hand, speed: 0, sharpness: 0, where: 0, angle: 0, x: 0, y: 0 });
+      }
+      touches.clear();
+      tracks.clear();
       return out;
     },
     /** The touches held right now (for continuous modulation and the glow). */

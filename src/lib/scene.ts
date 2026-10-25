@@ -4,7 +4,7 @@
  * point, a piece's size and the pitch it plays. Pure, over the `drawn` dial's `Piece` values.
  */
 import { MAX_STROKE_POINTS, type Piece, type PieceKind } from '../schema';
-import { add, bounds, centroid, dist, nearestOnPolyline, pathLength, pointInPolygon, resample, rotate, scale, type Vec2 } from './geometry';
+import { add, bounds, centroid, dist, nearestOnPolyline, pathLength, pointInPolygon, resample, rotate, scale, signedArea, type Vec2 } from './geometry';
 import { fitPrimitive, shapeAt, type Primitive } from './shapes';
 
 export const SCENE_TUNING = {
@@ -12,6 +12,9 @@ export const SCENE_TUNING = {
   closeGap: 0.12,
   /** Strokes shorter than this (display fractions) are ignored (a tap, not a drawing). */
   minLength: 0.06,
+  /** A closed stroke enclosing less than this area over its length squared is a line drawn back on
+   *  itself, not a shape: it becomes a string (a circle is about 0.08). */
+  minRoundness: 0.01,
   /** How near a string (display fractions) counts as on it. */
   stringReach: 0.03,
   /** Pitch from size: the smallest and largest piece sizes (display fractions) mapped to the scale's top and bottom. */
@@ -47,7 +50,8 @@ export const newPieceId = (taken: ReadonlySet<string>): string => {
 /** A finished stroke (display fractions) as a new piece, or null when it is too short to be one. */
 export function pieceFromStroke(pts: readonly Vec2[], { id, depth, shape }: { id: string; depth: number; shape: number }): Piece | null {
   if (pts.length < 3 || pathLength(pts) < SCENE_TUNING.minLength) return null;
-  const closed = isClosed(pts);
+  const len = pathLength(pts);
+  const closed = isClosed(pts) && Math.abs(signedArea(pts)) / (len * len) >= SCENE_TUNING.minRoundness;
   const kind: PieceKind = closed ? 'drum' : 'string';
   const body = closed ? pts.slice(0, -1) : pts;
   const sampled = resample(body, Math.min(MAX_STROKE_POINTS, Math.max(16, body.length)), closed);

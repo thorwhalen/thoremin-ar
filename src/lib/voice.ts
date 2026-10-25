@@ -13,6 +13,8 @@ export interface PieceSink {
   /** Start a held voice under `key` (a hand on a piece). */
   hold(key: string, timbre: Timbre, midi: number, c: VoiceControls, when: number): void;
   release(key: string, when: number): void;
+  /** Release every held voice. */
+  releaseAll(when: number): void;
   close(): void;
 }
 
@@ -135,8 +137,11 @@ export function createWebAudioPieceSink(ac: AudioContext, destination: AudioNode
       h.osc.stop(when + 6 * HOLD_RELEASE_TAU_S);
       held.delete(key);
     },
+    releaseAll(when) {
+      for (const k of [...held.keys()]) this.release(k, when);
+    },
     close() {
-      for (const [k] of held) this.release(k, ac.currentTime);
+      this.releaseAll(ac.currentTime);
       noise = null;
     },
   };

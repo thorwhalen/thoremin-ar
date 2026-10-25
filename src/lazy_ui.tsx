@@ -28,8 +28,12 @@ export const DRAWN_UI: ExtensionUi = {
   // The 3-D renderer (three.js), installed for the pure overlay element while this half is mounted.
   onMount: [
     () => {
-      setPieceRenderer(createGlPieceRenderer());
-      return () => setPieceRenderer(null);
+      const renderer = createGlPieceRenderer();
+      setPieceRenderer(renderer);
+      return () => {
+        setPieceRenderer(null);
+        renderer.dispose();
+      };
     },
   ],
 };

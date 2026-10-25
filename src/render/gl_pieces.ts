@@ -14,11 +14,21 @@ import { centroid, type Vec2 } from '../lib/geometry';
 import { outlineOf } from '../lib/scene';
 import { hueOf, LOOK } from '../nodes/overlay/look';
 
+/** One piece's meshes, with the base positions its animation displaces (a membrane's ripple, a string's vibration). */
+interface Entry {
+  key: string;
+  group: THREE.Group;
+  membrane?: THREE.Mesh;
+  string?: { mesh: THREE.Mesh; rings: number; ringSize: number };
+  base?: Float32Array;
+  animating?: boolean;
+}
+
 interface Gl {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.OrthographicCamera;
-  meshes: Map<string, { key: string; group: THREE.Group; membrane?: THREE.Mesh; base?: Float32Array; rippling?: boolean }>;
+  meshes: Map<string, Entry>;
   W: number;
   H: number;
 }
@@ -77,7 +87,7 @@ function membraneGeometry(outline: readonly Vec2[], W: number, H: number): THREE
   return g;
 }
 
-function tube(outline: readonly Vec2[], closed: boolean, radius: number, W: number, H: number): THREE.BufferGeometry {
+function tube(outline: readonly Vec2[], closed: boolean, radius: number, W: number, H: number): THREE.TubeGeometry {
   const curve = new THREE.CatmullRomCurve3(outline.map((p) => px(p, W, H)), closed, 'centripetal');
   return new THREE.TubeGeometry(curve, Math.max(16, outline.length), radius, 8, closed);
 }
@@ -89,7 +99,7 @@ function material(piece: Piece, glow: boolean): THREE.MeshStandardMaterial {
 }
 
 function pieceKey(piece: Piece, glow: boolean, W: number, H: number): string {
-  return `${piece.kind}|${piece.shape}|${piece.x}|${piece.y}|${piece.scale}|${piece.rot}|${piece.sound}|${glow}|${W}x${H}|${piece.stroke.length}|${piece.stroke[0]}|${piece.stroke[1]}`;
+  return `${piece.kind}|${piece.shape}|${piece.x}|${piece.y}|${piece.scale}|${piece.rot}|${piece.depth}|${piece.sound}|${glow}|${W}x${H}|${piece.stroke.length}|${piece.stroke[0]}|${piece.stroke[1]}`;
 }
 
 function disposeGroup(g: THREE.Group) {
@@ -100,19 +110,38 @@ function disposeGroup(g: THREE.Group) {
   });
 }
 
-function vibrated(outline: readonly Vec2[], pulse: Pulse, now: number, W: number, H: number): Vec2[] {
+/** Displace a string's tube in place: each ring of the tube along the string's normal, by a standing
+ *  wave (fixed ends) that decays; no geometry is rebuilt. */
+function vibrate(entry: Entry, pulse: Pulse, now: number) {
+  const st = entry.string!;
+  const base = entry.base!;
+  const attr = st.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+  const arr = attr.array as Float32Array;
   const age = now - pulse.t;
-  const amp = (LOOK.vibrateAmpPx * (0.4 + pulse.speed) * Math.exp(-age * 4)) * Math.sin(2 * Math.PI * LOOK.vibrateHz * age);
-  const n = outline.length;
-  return outline.map((p, i) => {
-    const a = outline[Math.max(0, i - 1)]!;
-    const b = outline[Math.min(n - 1, i + 1)]!;
-    const tx = (b[0] - a[0]) * W;
-    const ty = (b[1] - a[1]) * H;
+  const amp = LOOK.vibrateAmpPx * (0.4 + pulse.speed) * Math.exp(-age * 4) * Math.sin(2 * Math.PI * LOOK.vibrateHz * age);
+  const centre = (j: number): [number, number] => {
+    let x = 0;
+    let y = 0;
+    for (let r = 0; r < st.ringSize; r++) {
+      x += base[3 * (j * st.ringSize + r)]!;
+      y += base[3 * (j * st.ringSize + r) + 1]!;
+    }
+    return [x / st.ringSize, y / st.ringSize];
+  };
+  for (let j = 0; j < st.rings; j++) {
+    const a = centre(Math.max(0, j - 1));
+    const b = centre(Math.min(st.rings - 1, j + 1));
+    const tx = b[0] - a[0];
+    const ty = b[1] - a[1];
     const len = Math.hypot(tx, ty) || 1;
-    const shape = Math.sin((Math.PI * i) / (n - 1));
-    return [p[0] + ((-ty / len) * amp * shape) / W, p[1] + ((tx / len) * amp * shape) / H] as Vec2;
-  });
+    const d = amp * Math.sin((Math.PI * j) / (st.rings - 1));
+    for (let r = 0; r < st.ringSize; r++) {
+      const i = 3 * (j * st.ringSize + r);
+      arr[i] = base[i]! + (-ty / len) * d;
+      arr[i + 1] = base[i + 1]! + (tx / len) * d;
+    }
+  }
+  attr.needsUpdate = true;
 }
 
 function drawGl(gl: Gl, scene: DrawnScene, pulses: ReadonlyMap<string, Pulse>, now: number) {
@@ -122,8 +151,7 @@ function drawGl(gl: Gl, scene: DrawnScene, pulses: ReadonlyMap<string, Pulse>, n
     alive.add(piece.id);
     const glow = scene.touching.includes(piece.id);
     const pulse = pulses.get(piece.id);
-    const vibrating = piece.kind === 'string' && pulse && now - pulse.t < LOOK.vibrateSeconds;
-    const key = pieceKey(piece, glow, W, H) + (vibrating ? `|v${now}` : '');
+    const key = pieceKey(piece, glow, W, H);
     let entry = gl.meshes.get(piece.id);
     if (!entry || entry.key !== key) {
       if (entry) {
@@ -134,20 +162,36 @@ function drawGl(gl: Gl, scene: DrawnScene, pulses: ReadonlyMap<string, Pulse>, n
       const outline = outlineOf(piece);
       const mat = material(piece, glow);
       let membrane: THREE.Mesh | undefined;
+      let string: Entry['string'];
       if (piece.kind === 'drum') {
         membrane = new THREE.Mesh(membraneGeometry(outline, W, H), mat);
         group.add(membrane);
         group.add(new THREE.Mesh(tube(outline, true, LOOK.rimRadiusPx, W, H), mat.clone()));
       } else {
-        const line = vibrating ? vibrated(outline, pulse!, now, W, H) : outline;
-        group.add(new THREE.Mesh(tube(line, false, LOOK.stringRadiusPx, W, H), mat));
+        const geo = tube(outline, false, LOOK.stringRadiusPx, W, H);
+        const mesh = new THREE.Mesh(geo, mat);
+        group.add(mesh);
+        string = { mesh, rings: geo.parameters.tubularSegments + 1, ringSize: geo.parameters.radialSegments + 1 };
       }
       // Nearer pieces in front.
       group.position.z = (1 - piece.depth) * 100;
       gl.scene.add(group);
-      const base = membrane ? Float32Array.from((membrane.geometry.getAttribute('position') as THREE.BufferAttribute).array) : undefined;
-      entry = { key, group, membrane, base };
+      const animated = membrane ?? string?.mesh;
+      const base = animated ? Float32Array.from((animated.geometry.getAttribute('position') as THREE.BufferAttribute).array) : undefined;
+      entry = { key, group, membrane, string, base };
       gl.meshes.set(piece.id, entry);
+    }
+    // A pluck's vibration, in place; back to rest when it has died away.
+    if (entry.string && entry.base) {
+      if (pulse && pulse.kind === 'pluck' && now - pulse.t < LOOK.vibrateSeconds) {
+        vibrate(entry, pulse, now);
+        entry.animating = true;
+      } else if (entry.animating) {
+        const attr = entry.string.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+        (attr.array as Float32Array).set(entry.base);
+        attr.needsUpdate = true;
+        entry.animating = false;
+      }
     }
     // A hit's ripple: a damped ring wave from the contact point, on the membrane's base heights.
     if (entry.membrane && entry.base) {
@@ -169,12 +213,12 @@ function drawGl(gl: Gl, scene: DrawnScene, pulses: ReadonlyMap<string, Pulse>, n
         }
         attr.needsUpdate = true;
         entry.membrane.geometry.computeVertexNormals();
-        entry.rippling = true;
-      } else if (entry.rippling) {
+        entry.animating = true;
+      } else if (entry.animating) {
         arr.set(entry.base);
         attr.needsUpdate = true;
         entry.membrane.geometry.computeVertexNormals();
-        entry.rippling = false;
+        entry.animating = false;
       }
     }
   }
@@ -187,16 +231,30 @@ function drawGl(gl: Gl, scene: DrawnScene, pulses: ReadonlyMap<string, Pulse>, n
   gl.renderer.render(gl.scene, gl.camera);
 }
 
-/** A three.js piece renderer; null from the factory never, but each call returns null without WebGL. */
-export function createGlPieceRenderer(): PieceRenderer {
+/** Free everything a renderer holds, its WebGL context included (browsers cap live contexts). */
+function disposeGl(gl: Gl) {
+  for (const entry of gl.meshes.values()) disposeGroup(entry.group);
+  gl.meshes.clear();
+  gl.renderer.dispose();
+  gl.renderer.forceContextLoss();
+}
+
+/** A three.js piece renderer. Each call returns null where WebGL is unavailable; `dispose` frees it. */
+export function createGlPieceRenderer(): PieceRenderer & { dispose(): void } {
   let gl: Gl | null | undefined;
-  return ({ W, H, scene, pulses, now }) => {
+  const render: PieceRenderer = ({ W, H, scene, pulses, now }) => {
     if (gl === undefined || (gl && (gl.W !== W || gl.H !== H))) {
-      gl?.renderer.dispose();
+      if (gl) disposeGl(gl);
       gl = makeGl(W, H);
     }
     if (!gl) return null;
     drawGl(gl, scene, pulses, now);
     return gl.renderer.domElement;
   };
+  return Object.assign(render, {
+    dispose() {
+      if (gl) disposeGl(gl);
+      gl = undefined;
+    },
+  });
 }

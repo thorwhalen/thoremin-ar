@@ -71,7 +71,7 @@ describe('drawn-hands', () => {
     expect(contacts.filter((c) => c.kind === 'hit')).toHaveLength(1);
 
     const struck: { timbre: string; midi: number; gain: number }[] = [];
-    const sink = { strike: (timbre: string, midi: number, c: { gain: number }) => struck.push({ timbre, midi, gain: c.gain }), hold() {}, release() {}, close() {} };
+    const sink = { strike: (timbre: string, midi: number, c: { gain: number }) => struck.push({ timbre, midi, gain: c.gain }), hold() {}, release() {}, releaseAll() {}, close() {} };
     const voice = drawnVoiceNode.make(drawnVoiceNode.params!.parse({}));
     voice.process({ contacts, config, scale: [60, 62, 64, 65, 67], mute: false }, ctxAt(0, { [DRAWN_SINK_RESOURCE]: () => sink }));
     expect(struck).toHaveLength(1);

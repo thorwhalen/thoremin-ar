@@ -48,7 +48,8 @@ interface HandState {
   pointFilter: ReturnType<typeof createOneEuro2D>;
   tipFilter: ReturnType<typeof createOneEuro2D>;
   ink: Vec2[] | null;
-  grab: { id: string; last: Vec2 } | null;
+  /** The piece held, and where its centre sits relative to the pinch point (absolute, so a dial change mid-drag cannot make it drift). */
+  grab: { id: string; offset: Vec2 } | null;
   depth: number;
 }
 
@@ -74,6 +75,7 @@ export const drawnHandsNode = defineNode<Params>({
     let lastEdit: DrawnEdit | null = null;
     let configRef: unknown = null;
     let local: Piece[] | null = null;
+    let activeKey = '';
     const stateOf = (hand: string): HandState => {
       let s = hands.get(hand);
       if (!s) {
@@ -95,8 +97,17 @@ export const drawnHandsNode = defineNode<Params>({
         let pieces = local ?? config.pieces;
         const frame = inputs.hands as HandsFrame | undefined;
         const t = frameTime(frame, ctx);
+        // Leaving play (or switching off) releases every held note; any mode change drops half-made
+        // ink, grabs and pinches, so nothing carries over into the other mode.
+        const key = config.enabled ? config.mode : 'off';
+        let released: ContactEvent[] = [];
+        if (key !== activeKey) {
+          released = contact.releaseAll(t);
+          hands.clear();
+          activeKey = key;
+        }
         const empty: DrawnScene = { mode: config.mode, pieces, ink: [], pointers: [], touching: [] };
-        if (!config.enabled) return { scene: empty, edits: lastEdit, contacts: [] };
+        if (!config.enabled) return { scene: empty, edits: lastEdit, contacts: released };
         const commit = (next: Piece[], what: DrawnEdit['what']) => {
           local = next;
           pieces = next;
@@ -107,10 +118,14 @@ export const drawnHandsNode = defineNode<Params>({
         const present = new Set<string>();
         const samples: StrikerSample[] = [];
         const pointers: DrawnScene['pointers'] = [];
+        const seenLabels = new Map<string, number>();
         for (const hand of frame?.hands ?? []) {
           const kps = hand.keypoints;
           if (!W || !H || kps.length < 21) continue;
-          const id = hand.handedness;
+          // MediaPipe can label both hands alike: a repeated label gets its own id, so two hands never share a state.
+          const n = seenLabels.get(hand.handedness) ?? 0;
+          seenLabels.set(hand.handedness, n + 1);
+          const id = n === 0 ? hand.handedness : `${hand.handedness}#${n}`;
           present.add(id);
           const s = stateOf(id);
           const mid = (a: number, b: number): Vec2 => {
@@ -131,7 +146,7 @@ export const drawnHandsNode = defineNode<Params>({
           if (r.edge === 'down') {
             const at = r.anchor ?? r.point;
             const under = pieceAt(pieces, at);
-            if (under) s.grab = { id: under.id, last: r.point };
+            if (under) s.grab = { id: under.id, offset: [under.x - r.point[0], under.y - r.point[1]] };
             else s.ink = [at];
           } else if (r.down) {
             if (s.ink) {
@@ -139,9 +154,8 @@ export const drawnHandsNode = defineNode<Params>({
               if (dist(last, r.point) >= INK_STEP) s.ink.push(r.point);
             } else if (s.grab) {
               const g = s.grab;
-              const [dx, dy] = [r.point[0] - g.last[0], r.point[1] - g.last[1]];
-              g.last = r.point;
-              pieces = pieces.map((pc) => (pc.id === g.id ? movedBy(pc, dx, dy) : pc));
+              const [x, y] = [r.point[0] + g.offset[0], r.point[1] + g.offset[1]];
+              pieces = pieces.map((pc) => (pc.id === g.id ? movedBy(pc, x - pc.x, y - pc.y) : pc));
               local = pieces;
             }
           } else if (r.edge === 'up') {
@@ -172,8 +186,8 @@ export const drawnHandsNode = defineNode<Params>({
             s.grab = null;
           }
         }
-        let contacts: ContactEvent[] = [];
-        if (config.mode === 'play') contacts = contact.update(t, samples, pieces, { hitSpeed: config.hitSpeed, depthMatch: config.depthMatch });
+        let contacts: ContactEvent[] = released;
+        if (config.mode === 'play') contacts = [...released, ...contact.update(t, samples, pieces, { hitSpeed: config.hitSpeed, depthMatch: config.depthMatch })];
         const ink = [...hands.values()].flatMap((s) => (s.ink ? [s.ink] : []));
         const touching = config.mode === 'play' ? contact.activeTouches().map((x) => x.piece) : [];
         return { scene: { mode: config.mode, pieces, ink, pointers, touching } satisfies DrawnScene, edits: lastEdit, contacts };
