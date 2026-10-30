@@ -10,6 +10,7 @@ import { makeDrawnReporter } from '@thoremin/ext-draw/app/drawnStatus';
 import { piecesElement } from '@thoremin/ext-draw/nodes/overlay/pieces';
 import type { ContactEvent } from '@thoremin/ext-draw/lib/contact';
 import type { Piece } from '@thoremin/ext-draw/schema';
+import { makeFrameView } from '@thoremin/sdk/view/frame_view';
 import { makeRecordingCanvas } from '../helpers/canvas';
 import { circlePath, frameOf, handAt } from './synthetic';
 
@@ -112,7 +113,7 @@ describe('the reporter and the overlay', () => {
     const g = rc.canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
     const scene: DrawnScene = { mode: 'play', pieces, ink: [], pointers: [{ hand: 'Right', p: [0.5, 0.5], down: false, holding: null }], touching: [] };
     const memo: Record<string, unknown> = {};
-    const frame = { W: 1280, H: 720, t: 1 };
+    const frame = { W: 1280, H: 720, t: 1, display: makeFrameView({ width: 1280, height: 720 }, undefined) };
     piecesElement.update!(frame, { scene, contacts: [] }, memo);
     piecesElement.draw(g, frame, { scene, contacts: [] }, memo);
     expect(rc.count('fill')).toBeGreaterThan(0);

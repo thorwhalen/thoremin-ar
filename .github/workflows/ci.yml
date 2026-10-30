@@ -34,6 +34,16 @@ jobs:
         with:
           path: plugin
 
+      # thoremin and both plugins are private: GITHUB_TOKEN reaches only this repository, so CI reads
+      # them with one read-only deploy key each (thoremin's docs/CI_COST.md, "Private repositories").
+      - name: Keys for thoremin and its plugins
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.THOREMIN_DEPLOY_KEY }}
+            ${{ secrets.THOREMIN_ASL_DEPLOY_KEY }}
+            ${{ secrets.THOREMIN_AR_DEPLOY_KEY }}
+
       # The host ref: the one asked for, else a thoremin branch named like this one (a change that
       # needs a host change too is reviewed as a pair of same-named branches), else main.
       - name: Pick the thoremin ref
@@ -43,15 +53,17 @@ jobs:
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           ref="$ASKED"
-          if [ -z "$ref" ] && [ "$BRANCH" != "main" ] && git ls-remote --exit-code --heads https://github.com/thorwhalen/thoremin "$BRANCH" >/dev/null; then ref="$BRANCH"; fi
+          if [ -z "$ref" ] && [ "$BRANCH" != "main" ] && git ls-remote --exit-code --heads ssh://git@github.com/thorwhalen/thoremin.git "$BRANCH" >/dev/null; then ref="$BRANCH"; fi
           echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
           echo "testing against thoremin ${ref:-main}"
 
-      - uses: actions/checkout@v4
-        with:
-          repository: thorwhalen/thoremin
-          ref: ${{ steps.host.outputs.ref }}
-          path: host
+      - name: Check out thoremin
+        env:
+          REF: ${{ steps.host.outputs.ref }}
+        run: |
+          git init -q host
+          git -C host fetch -q --depth=1 ssh://git@github.com/thorwhalen/thoremin.git "$REF"
+          git -C host checkout -q FETCH_HEAD
 
       - uses: actions/setup-node@v4
         with:
